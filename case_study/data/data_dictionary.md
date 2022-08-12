@@ -12,11 +12,16 @@ have been simulated from our fitted model. The R data file accompanying this pap
 * **X**: matrix of covariates and intercept along with the first and second principal components of the PRISM climatic dataset.
 * **prism_rasters**: rasters of the first and second principal components of the PRISM climatic dataset.
 
-The ordering of values in Y_loc, Y_pos, and Y_neg corresponds to the indices of grid cells in the PRISM rasters. For instance, if you wish to visualize counts of sampling events, or of collelcted rodents,on the raster defining the study region, apply the following:
+The ordering of values in Y_loc, Y_pos, and Y_neg corresponds to the indices of grid cells in the PRISM rasters. For instance, if you wish to visualize counts of sampling events, or of collelcted rodents, on the raster defining the study region, apply the following:
 
 ```
 library(raster)
 library(sp)
+
+plague_data <- readRDS('plague_data_simulated.rds')
+prism_rasters <- plague_data$prism_rasters
+Y_loc <- plague_data$Y_loc
+Y_pos <- plague_data$Y_pos
 
 # use the first raster layer for the study region
 study_region <- prism_rasters[[1]]
