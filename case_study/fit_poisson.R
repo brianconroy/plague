@@ -12,7 +12,7 @@ DATA_FILE <- 'data/plague_agg7.rds'
 
 dat <- readRDS(file = DATA_FILE)
 
-# Subset data for Spatial Poisson model
+# Subset data for Poisson model
 dat_pois <- list(
   N_obs = dat$N_obs,
   P = 3,
