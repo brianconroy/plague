@@ -2,9 +2,9 @@
 # Data Dictionary
 
 Due to data sharing restrictions from the California Department of Public Health
-stemming from privacy concerns around the implications of plague occurrence for 
-real estate prices, etc, the counts of positive and negative rodents in this dataset
-have been simulated from our fitted model. The R data file accompanying this paper contains a list with the following elements.
+the counts of positive and negative rodents in this dataset
+have been simulated from our fitted (shared latent process) model. 
+The R data file **plague_data_simulated.rds** accompanying this paper contains a list with the following elements.
 
 * **Y_loc**: counts of sampling events conducted in each grid cell of the study region.
 * **Y_pos**: counts of disease positive rodents collected in each grid cell that has been sampled by the surveillance system.
@@ -42,3 +42,8 @@ rodent_raster[][is_in_region][is_sampled] <- Y_pos
 plot(rodent_raster)
 
 ```
+
+There is also a CSV version of the data, **plague_data_simulated.csv**, which 
+has columns Y_loc, Y_Pos, Y_neg (with identical definitions as above), as well as columns
+cell_id, X_pc1, and X_pc2, corresponding to the raster cell id, first PRISM principal
+component, and second PRISM principal component, respectively.
