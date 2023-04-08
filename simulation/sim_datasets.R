@@ -1,4 +1,7 @@
 
+# This script simulates disease surveillance datasets
+# from the proposed shared latent process model.
+
 library(rstan)
 library(dplyr)
 library(bayesplot)
@@ -17,32 +20,32 @@ N_SIMS <- 50
 
 OUTPUT_DIR <- 'sim_data'
 
-AGG_FACTOR <- 16
+AGG_FACTOR <- 15
 
 # Range
-Theta <- 200
+Theta <- 100
 
 # Marginal variance
-Phi <- 1
+Phi <- 2
 
 # Outcome for locations
-Beta_loc <- c(-0.25, 1.25, 1.5)
+Beta_loc <- c(-1, 1.5, -1)
 
-Beta_pos <- c(0.5, -1, 2)
-
-# Additional spatial process
-Theta_pos <- 100 # range
-Phi_pos <- 0.5 # marginal variance
-
-Beta_neg <-  c(3.5, 1.5, 2.5)
+Beta_pos <- c(-1, 2.5, 1.5)
 
 # Additional spatial process
-Theta_neg <- 100 # range
-Phi_neg <- 0.5 # marginal variance
+Theta_pos <- 100 #  Range
+Phi_pos <- 0.5   #  Marginal variance
+
+Beta_neg <-  c(1, 0.5, 0.75)
+
+# Additional spatial process
+Theta_neg <- 100 #  Range
+Phi_neg <- 0.5   #  Marginal variance
 
 # ------------- Covariates and Distance Matrix -------------- #
 
-# add covariates from PRISM
+# Load covariates from PRISM
 caPr <- raster::stack("data/prism_pcas_ca.grd")
 caPr.disc <- aggregate(caPr, fact = AGG_FACTOR)
 plot(caPr.disc)
@@ -55,15 +58,15 @@ X <- cbind(1,
            caPr.disc[[1]][][!is.na(caPr.disc[[1]][])],
            caPr.disc[[2]][][!is.na(caPr.disc[[2]][])])
 
-# get distance matrix
+# Get distance matrix
 cells.all <- c(1:ncell(caPr.disc))[!is.na(values(caPr.disc[[1]]))]
 coords <- xyFromCell(caPr.disc[[1]], cell = cells.all)
 colnames(coords) <- c('longitude', 'latitude')
 
 # Geodesic distances in kilometers
-d <- geodist(coords, measure = 'geodesic' )/1000
+d <- geodist(coords, measure = 'geodesic')/1000
 
-# covariance function
+# Covariance function
 cov_exp <- function(dist_matrix, alpha, rho){
   
   # Gaussian process covariance matrix
@@ -94,7 +97,11 @@ for (i in 1:N_SIMS){
   # Keep generating datasets until prevalence and count criteria are met
   flag <- TRUE
   
+  counter <- 0
+  
   while (flag){
+    
+    counter <- counter + 1
     
     # Shared latent process
     W <- mvrnorm(n = 1, mu = rep(0, N), Sigma)
@@ -102,7 +109,7 @@ for (i in 1:N_SIMS){
     # ----------------- Simulate sampling effort ----------------- #
     
     # Randomly draw preferential sampling parameter
-    Alpha_pos <- abs(rnorm(1, 0, 2))
+    Alpha_pos <- abs(rnorm(1, 0, 1))
     
     # Sampling counts
     Y_loc <- rpois(n = N, lambda = exp(X %*% Beta_loc + W))
@@ -116,8 +123,11 @@ for (i in 1:N_SIMS){
     Sigma_pos <- cov_exp(d, Phi_pos, Theta_pos)
     Eta_pos <- mvrnorm(n = 1, mu = rep(0, nrow(d)), Sigma_pos)
     
+    # Offset
+    N_offset <- Y_loc
+    
     # Disease positive counts over the entire study region
-    Y_pos_all <- rpois(n = N, lambda = exp(X %*% Beta_pos + Eta_pos + Alpha_pos * W))
+    Y_pos_all <- rpois(n = N, lambda = N_offset * exp(X %*% Beta_pos + Eta_pos + Alpha_pos * W))
     
     # Observed disease positive counts
     Y_pos <- Y_pos_all[obs_inds]
@@ -125,14 +135,14 @@ for (i in 1:N_SIMS){
     # ----------------- Disease negative counts ------------------ #
     
     # Preferential sampling parameter for disease negative counts
-    Alpha_neg <- abs(rnorm(1, 0, 2))
+    Alpha_neg <- abs(rnorm(1, 0, 1))
     
     # Additional spatial process
     Sigma_neg <- cov_exp(d, Phi_neg, Theta_neg)
     Eta_neg <- mvrnorm(n = 1, mu = rep(0, nrow(d)), Sigma_neg)
     
     # Disease negative counts over the entire study region
-    Y_neg_all <- rpois(n = N, lambda = exp(X %*% Beta_neg + Eta_neg + Alpha_neg * W))
+    Y_neg_all <- rpois(n = N, lambda = N_offset * exp(X %*% Beta_neg + Eta_neg + Alpha_neg * W))
     
     # Observed disease negative counts
     Y_neg <- Y_neg_all[obs_inds]
@@ -140,21 +150,52 @@ for (i in 1:N_SIMS){
     # Check to see if criteria are met
     prev_i <- sum(Y_pos_all)/sum(Y_pos_all + Y_neg_all)
     frac_i <- mean(obs_inds)
-    
+
     if (
       (prev_i > 0.02)
-      & (prev_i < 0.4)
+      & (prev_i < 0.3)
       & (sum(Y_pos) > 500)
       & (sum(Y_pos) < 50000)
       & (sum(Y_neg) > 500)
       & (sum(Y_neg) < 500000)
-      & (frac_i > 0.1)
-      & (frac_i < 0.7)
-      & (Alpha_neg >= 0)
-      & (Alpha_pos >= 0)
+      & (max(Y_pos) < 5000)
+      & (max(Y_neg) < 10000)
+      & (frac_i > 0.33)
+      & (frac_i < 0.66)
+      & (Alpha_neg <= 2)
+      & (Alpha_pos <= 2)
     ) {
+      
       # Proceed to next dataset
       flag <- FALSE
+      
+      par(mfrow = c(3,2))
+      plot(x = abs(X %*% Beta_pos),
+           y = abs(Alpha_pos * W),
+           main = 'Y(+): Covariates vs Alpha*W')
+      abline(0, 1)
+      
+      plot(x = abs(X %*% Beta_neg),
+           y = abs(Alpha_neg * W),
+           main = 'Y(-): Covariates vs Alpha*W')
+      abline(0, 1)
+      
+      plot(x = abs(Eta_pos),
+           y = abs(Alpha_pos * W),
+           main = 'Y(+): Eta vs Alpha*W')
+      abline(0, 1)
+      
+      plot(x = abs(Eta_neg),
+           y = abs(Alpha_neg * W),
+           main = 'Y(-): Eta vs Alpha*W')
+      abline(0, 1)
+      
+      hist(Alpha_pos * W - Alpha_neg * W)
+      
+      plot(x = abs(Eta_pos - Eta_neg),
+           y = abs(Alpha_pos * W - Alpha_neg * W),
+           main = 'Y(-): Eta vs Alpha*W')
+      abline(0, 1)
     }
     
   }
@@ -169,7 +210,12 @@ for (i in 1:N_SIMS){
       num_pos_observed = sum(Y_pos),
       num_neg_observed = sum(Y_neg),
       alpha_p = Alpha_pos,
-      alpha_n = Alpha_neg
+      alpha_n = Alpha_neg,
+      y_pos_max = max(Y_pos),
+      y_neg_max = max(Y_neg),
+      y_pos_median = median(Y_pos),
+      y_neg_median = median(Y_neg),
+      n_tries = counter
     )
   )
   
@@ -221,11 +267,16 @@ for (i in 1:N_SIMS){
 hist(summary_stats$prevalence)
 summary(summary_stats$prevalence)
 
-# Numbers observed
-summary(summary_stats$num_pos_observed)
-summary(summary_stats$num_neg_observed)
+hist(summary_stats$y_pos_max)
+hist(summary_stats$y_neg_max)
 
-# Difference in preferential sampling params
+summary(summary_stats$y_pos_max)
+summary(summary_stats$y_neg_max)
+
+summary(summary_stats$y_pos_median)
+summary(summary_stats$y_neg_median)
+
+# Difference in preferential sampling parameters
 hist(summary_stats$alpha_p - summary_stats$alpha_n)
 
 # Fractions observed
