@@ -1,4 +1,7 @@
 
+# This script generates risk maps from the models
+# fit to the CDPH plague surveillance data.
+
 library(rstan)
 library(aws.s3)
 library(sp)
@@ -19,11 +22,11 @@ set.seed(123)
 
 AGG_FACTOR <- 7
 
-DOWNLOAD_FROM_S3 <- FALSE
+DOWNLOAD_FROM_S3 <- TRUE
 
-SLP_TAG <- 'agg7'
-SPOIS_TAG <- 'agg7'
-POISSON_TAG <- 'agg7'
+SLP_TAG <- 'slp' 
+SPOIS_TAG <- 'spois'
+POISSON_TAG <- 'pois'
 
 DATA_FILE <- 'data/plague_data_agg7.rds'
 
@@ -45,16 +48,8 @@ SPATIAL_POISSON_KRIGE_NEG_NAME <- paste0('cdph_fits/cdph_spois_krige_neg_', SPOI
 KRIGE_SPOIS <- TRUE
 KRIGE_SLP <- TRUE
 
-# Downscaling
-SLP_W_INTERP_FILE <- paste0('cdph_fits/cdph_slp_w_interp_', SLP_TAG, '.rds')
-SLP_ETA_POS_INTERP_FILE <- paste0('cdph_fits/cdph_slp_eta_pos_interp_', SLP_TAG, '.rds')
-SLP_ETA_NEG_INTERP_FILE <- paste0('cdph_fits/cdph_slp_eta_neg_interp_', SLP_TAG, '.rds')
-
-SPOIS_ETA_POS_INTERP_FILE <- paste0('cdph_fits/cdph_spois_eta_pos_interp_', SPOIS_TAG, '.rds')
-SPOIS_ETA_NEG_INTERP_FILE <- paste0('cdph_fits/cdph_spois_eta_neg_interp_', SPOIS_TAG, '.rds')
-
 INTERPOLATE_SPOIS <- TRUE
-INTERPOLATE_SLP <- FALSE
+INTERPOLATE_SLP <- TRUE
 
 FIND_BWS_SPOIS <- TRUE
 FIND_BWS_SLP <- TRUE
@@ -64,7 +59,7 @@ SLP_FINE_RASTER_FILE <- paste0('cdph_fits/cdph_slp_raster_fine_', SLP_TAG, '.rds
 SLP_SIGNIFICANCE_RASTER_FILE <- paste0('cdph_fits/cdph_slp_raster_significance_', SLP_TAG, '.rds')
 
 SPOIS_FINE_RASTER_FILE <- paste0('cdph_fits/cdph_spois_raster_', SPOIS_TAG, '.rds')
-SPOIS_SIGNIFICANCE_RASTER_FILE <- paste0('cdph_fits/cdph_spois_raster_significance_', SLP_TAG, '.rds')
+SPOIS_SIGNIFICANCE_RASTER_FILE <- paste0('cdph_fits/cdph_spois_raster_significance_', SPOIS_TAG, '.rds')
 
 POISSON_FINE_RASTER_FILE <- 'cdph_fits/cdph_poisson_raster_fine.rds'
 POISSON_SIGNIFICANCE_RASTER_FILE <- 'cdph_fits/cdph_poisson_raster_significance.rds'
@@ -176,7 +171,7 @@ get_optimal_bws <- function(r_pred, r_train, z){
   
 }
 
-interpolate_gp_batched  <- function(samples, bws, r_train, r_pred, batch_size=500){
+interpolate_gp_batched  <- function(samples, bws, r_train, r_pred, batch_size = 500){
   
   samples_int <- lapply(1:(nrow(samples)/batch_size),function(batch) {
     print(paste(batch))
@@ -188,7 +183,7 @@ interpolate_gp_batched  <- function(samples, bws, r_train, r_pred, batch_size=50
   
 }
 
-interpolate_gp <- function(samples, bws, r_train, r_pred, out_file=NULL){
+interpolate_gp <- function(samples, bws, r_train, r_pred, out_file = NULL){
   
   txdat <- data.frame(xyFromCell(r_train, (1:ncell(r_train))[!is.na(r_train[])]))
   x <- txdat[,1]
@@ -225,9 +220,9 @@ interpolate_gp <- function(samples, bws, r_train, r_pred, out_file=NULL){
   
 }
 
-calc_posterior_risk_ds <- function(x, beta_pos_samp, beta_neg_samp, eta_pos_samp,
-                                   eta_neg_samp, alpha_pos_samp, alpha_neg_samp,
-                                   w_samp){
+calc_posterior_risk <- function(x, beta_pos_samp, beta_neg_samp, eta_pos_samp,
+                                eta_neg_samp, alpha_pos_samp, alpha_neg_samp,
+                                w_samp){
   
   n.samp <- nrow(beta_pos_samp)
   n.cell <- ncol(w_samp)
@@ -253,21 +248,6 @@ calc_posterior_risk_ds <- function(x, beta_pos_samp, beta_neg_samp, eta_pos_samp
   
 }
 
-
-get_gamma_prior <- function(mu, v){
-  
-  alpha <- (mu ** 2)/v
-  beta <- mu/v 
-  return(c(alpha, beta))
-  
-}
-
-gamma_mean <- function(alpha, beta){
-  
-  return(c(alpha/beta, alpha/(beta**2)))
-  
-}
-
 write_latex_table <- function(df, fname, path){
   
   df[,] <- lapply(df[, ], as.character)
@@ -283,16 +263,25 @@ write_latex_table <- function(df, fname, path){
   }
   end <- "\\hline
   \\end{tabular}
-  \\caption[nrgk]
+  \\caption[placeholder]
   {
-  nrgk
+  placeholder
   }
-  \\label{tab:nrgk}
+  \\label{tab:placeholder}
   \\end{center}
   \\end{table}"
   tab <- paste(tab, end, sep=" ")
   path <- paste(path, fname, sep="")
   write(tab, path)
+  
+}
+
+calc_sig_map <- function(risk_df, threshold){
+  
+  r_inds <- apply(risk_df, 2, function(x) return(mean(x > threshold) > 0.95))
+  r_inds_raster <- caPr[[1]]
+  r_inds_raster[][!is.na(r_inds_raster[])] <- r_inds
+  return(r_inds_raster)
   
 }
 
@@ -305,8 +294,6 @@ plot(caPr.disc)
 
 N <- length(caPr.disc[[1]][][!is.na(caPr.disc[[1]][])])
 print(N)
-
-mean(area(caPr.disc[[1]]))
 
 ##############################################################
 #                       Create Maps                          #
@@ -327,111 +314,59 @@ if (ANALYZE_POIS){
   beta_pos_hat <- colMeans(posterior[,grepl('beta_pos', colnames(posterior))])
   beta_neg_hat <- colMeans(posterior[,grepl('beta_neg', colnames(posterior))])
   
-  # Log odds
-  X <- dat$X
-  lodds_pois <- X %*% beta_pos_hat - X %*% beta_neg_hat
-  risk_pois <- exp(lodds_pois)/(1 + exp(lodds_pois))
-  
-  # Observed vs expected
-  par(mfrow=c(1,2))
-  exp_pos <- exp(X[dat$I_obs,] %*% beta_pos_hat)
-  plot(x=dat$Y_pos, y=exp_pos, xlab = 'Observed Count', ylab = 'Expected Count',
-       main = 'Poisson (Disease Positive)')
-  abline(0, 1, col=2)
-  
-  exp_neg <- exp(X[dat$I_obs,] %*% beta_neg_hat)
-  plot(x=dat$Y_neg, y=exp_neg, xlab = 'Observed Count', ylab = 'Expected Count',
-       main = 'Poisson (Disease Negative)')
-  abline(0, 1, col=2)
-
-  # Raster (coarse)
-  r_pois_crude <- caPr.disc[[1]]
-  r_pois_crude[][!is.na(r_pois_crude[])] <- risk_pois
-  plot(r_pois_crude)
-
-  # Risk (fine)
+  # Posterior risk samples
   X_f <- cbind(1, 
                caPr[[1]][][!is.na(caPr[[1]][])],
                caPr[[2]][][!is.na(caPr[[2]][])])
-  lodds_pois_f <- X_f %*% beta_pos_hat - X_f %*% beta_neg_hat
-  risk_pois_f <- exp(lodds_pois_f)/(1 + exp(lodds_pois_f))
-  
-  # Raster (fine)
-  r_pois_f <- caPr[[1]]
-  r_pois_f[][!is.na(r_pois_f[])] <- risk_pois_f
-  plot(r_pois_f)
-  
-  # Raster (fine, disease positive)
-  pois_pos <- exp(X_f %*% beta_pos_hat)
-  pois_neg <- exp(X_f %*% beta_neg_hat)
-  r_pois_pos <- caPr[[1]]
-  r_pois_pos[][!is.na(r_pois_pos[])] <- pois_pos
-  r_pois_neg <- caPr[[1]]
-  r_pois_neg[][!is.na(r_pois_neg[])] <- pois_neg
-  
-  plot_title <- ggtitle("Posterior distributions",
-                        "with medians and 80% intervals")
-  color_scheme_set("green")
-  mcmc_areas(posterior,
-             pars = c("beta_pos[1]", "beta_pos[2]", "beta_pos[3]"),
-             prob = 0.8) + plot_title
-  
-  plot_title <- ggtitle("Posterior distributions",
-                        "with medians and 80% intervals")
-  color_scheme_set("green")
-  mcmc_areas(posterior,
-             pars = c("beta_neg[1]", "beta_neg[2]", "beta_neg[3]"),
-             prob = 0.8) + plot_title
-  
-  # Posterior risk samples
   beta_pos_samp <- posterior[,grepl('beta_pos', colnames(posterior))]
   beta_neg_samp <- posterior[,grepl('beta_neg', colnames(posterior))]
-  pois_risk_samp <- calc_posterior_risk_ds(X_f, 
-                                           beta_pos_samp, 
-                                           beta_neg_samp, 
-                                           eta_pos_samp = matrix(0, ncol=nrow(X_f), nrow=nrow(beta_pos_samp)),
-                                           eta_neg_samp = matrix(0, ncol=nrow(X_f), nrow=nrow(beta_pos_samp)),
-                                           alpha_pos_samp = matrix(0, nrow=nrow(X_f) , ncol=1), 
-                                           alpha_neg_samp = matrix(0, nrow=nrow(X_f) , ncol=1),
-                                           w_samp = matrix(0, nrow=nrow(beta_pos_samp), ncol=nrow(X_f)))
+  pois_risk_samp <- calc_posterior_risk(X_f, 
+                                        beta_pos_samp, 
+                                        beta_neg_samp, 
+                                        eta_pos_samp = matrix(0, ncol = nrow(X_f), nrow = nrow(beta_pos_samp)),
+                                        eta_neg_samp = matrix(0, ncol = nrow(X_f), nrow = nrow(beta_pos_samp)),
+                                        alpha_pos_samp = matrix(0, nrow = nrow(X_f) , ncol = 1), 
+                                        alpha_neg_samp = matrix(0, nrow = nrow(X_f) , ncol = 1),
+                                        w_samp = matrix(0, nrow = nrow(beta_pos_samp), ncol = nrow(X_f)))
   
+  # Risk map
   r_pois_f <- caPr[[1]]
   r_pois_f[][!is.na(r_pois_f[])] <- colMeans(pois_risk_samp)
   plot(r_pois_f)
-  
-  r_pois_f[][1] <- 0.002
-  r_pois_f[][2] <- 0.2
-  
-  mu_risk <- 0.064
-  r_inds <- apply(pois_risk_samp, 2, function(x) return(mean(x > mu_risk) > 0.95))
-  r_pois_ind <- caPr[[1]]
-  r_pois_ind[][!is.na(r_pois_ind[])] <- r_inds
+
+  # Significance indicator maps  
+  r_pois_ind1 <- calc_sig_map(pois_risk_samp, threshold = 0.064)
+  r_pois_ind2 <- calc_sig_map(pois_risk_samp, threshold = 0.032)
+  r_pois_ind <- stack(r_pois_ind1, r_pois_ind2)
   plot(r_pois_ind)
-  
-  mu_risk <- 0.032
-  r_inds <- apply(pois_risk_samp, 2, function(x) return(mean(x > mu_risk) > 0.95))
-  r_pois_ind <- caPr[[1]]
-  r_pois_ind[][!is.na(r_pois_ind[])] <- r_inds
-  plot(r_pois_ind)
-  
+
+  saveRDS(r_pois_f, POISSON_FINE_RASTER_FILE)
+  saveRDS(r_pois_ind, POISSON_SIGNIFICANCE_RASTER_FILE)
+
   # DIC
   
-  # log density of observed data given posterior mean
-  mu_pos <- exp(X[dat$I_obs,] %*% beta_pos_hat)
-  mu_neg <- exp(X[dat$I_obs,] %*% beta_neg_hat)
+  X <- dat$X
+  
+  # Offset
+  N_offset <- dat$Y_loc[dat$I_obs]
+  
+  # Log density of observed data given posterior mean
+  mu_pos <- N_offset * exp(X[dat$I_obs,] %*% beta_pos_hat)
+  mu_neg <- N_offset * exp(X[dat$I_obs,] %*% beta_neg_hat)
   log_p_y <- sum(dpois(dat$Y_pos, mu_pos, log = TRUE) + dpois(dat$Y_neg, mu_neg, log = TRUE))
   
-  # evaluate penalty
+  # Evaluate penalty
   sum_log_p_y <- c()
   for (s in 1:length(posterior[,'beta_pos[1]'])){
     
-    # vector of means for the ith posterior draw
-    lambda_s_pos <- exp(X[dat$I_obs,] %*% beta_pos_samp[s,])
-    lambda_s_neg <- exp(X[dat$I_obs,] %*% beta_neg_samp[s,])
+    # Vector of means for the ith posterior draw
+    lambda_s_pos <- N_offset * exp(X[dat$I_obs,] %*% beta_pos_samp[s,])
+    lambda_s_neg <- N_offset * exp(X[dat$I_obs,] %*% beta_neg_samp[s,])
     
-    # take log density of observed data for the ith sample
+    # Take log density of observed data for the ith sample
     log_p_y_s <- sum(dpois(dat$Y_pos, lambda_s_pos, log = T)) + sum(dpois(dat$Y_neg, lambda_s_neg, log = T))
     sum_log_p_y <- c(sum_log_p_y, log_p_y_s)
+    
   }
   p_dic <- 2 * (log_p_y - mean(sum_log_p_y))
   
@@ -445,6 +380,7 @@ if (ANALYZE_POIS){
     )
   )
   
+  # Parameter estimates
   pois_params <- c()
   for (i in 1:3){
     pois_params <- rbind(
@@ -469,9 +405,33 @@ if (ANALYZE_POIS){
     )
   }
   write_latex_table(pois_params, '/poisson_estimates.txt', getwd())
-    
-  saveRDS(r_pois_f, POISSON_FINE_RASTER_FILE)
-  saveRDS(r_pois_ind, POISSON_SIGNIFICANCE_RASTER_FILE)
+  
+  # Other checks
+  X <- dat$X
+  par(mfrow = c(1, 2))
+  exp_pos <- exp(X[dat$I_obs,] %*% beta_pos_hat)
+  plot(x = dat$Y_pos, y = exp_pos, xlab = 'Observed Count', ylab = 'Expected Count',
+       main = 'Poisson (Disease Positive)')
+  abline(0, 1, col = 2)
+  
+  exp_neg <- exp(X[dat$I_obs,] %*% beta_neg_hat)
+  plot(x = dat$Y_neg, y = exp_neg, xlab = 'Observed Count', ylab = 'Expected Count',
+       main = 'Poisson (Disease Negative)')
+  abline(0, 1, col = 2)
+  
+  plot_title <- ggtitle("Posterior distributions",
+                        "with medians and 80% intervals")
+  color_scheme_set("green")
+  mcmc_areas(posterior,
+             pars = c("beta_pos[1]", "beta_pos[2]", "beta_pos[3]"),
+             prob = 0.8) + plot_title
+  
+  plot_title <- ggtitle("Posterior distributions",
+                        "with medians and 80% intervals")
+  color_scheme_set("green")
+  mcmc_areas(posterior,
+             pars = c("beta_neg[1]", "beta_neg[2]", "beta_neg[3]"),
+             prob = 0.8) + plot_title
   
 }
 
@@ -480,13 +440,6 @@ if (ANALYZE_POIS){
 if (ANALYZE_SPOIS){
 
   if (DOWNLOAD_FROM_S3){
-  
-    # Retrieve data
-    save_object(
-      bucket = "plague-analysis",
-      object = 'plague_data.rds',
-      file = 'plague_data.rds'
-    )
   
     # Retrieve fit
     save_object(
@@ -519,6 +472,8 @@ if (ANALYZE_SPOIS){
                                & !(grepl('beta', colnames(posterior)))
                                & !(grepl('theta', colnames(posterior)))]
   eta_neg_hat <- colMeans(eta_neg_samples)
+  beta_pos_samples <- posterior[,grepl('beta_pos', colnames(posterior))]
+  beta_neg_samples <- posterior[,grepl('beta_neg', colnames(posterior))]
   
   print(paste('MCMC draws:',length(posterior[,'theta_pos'])))
   
@@ -527,22 +482,25 @@ if (ANALYZE_SPOIS){
   
   # DIC
   
-  # log density of observed data given posterior mean
+  # Offset
+  N_offset <- dat$Y_loc[dat$I_obs]
+  
+  # Log density of observed data given posterior mean
   X <- dat$X
   inds <- dat$I_obs
-  mu_pos <- exp(X[inds,] %*% beta_pos_hat + eta_pos_hat)
-  mu_neg <- exp(X[inds,] %*% beta_neg_hat + eta_neg_hat)
+  mu_pos <- N_offset * exp(X[inds,] %*% beta_pos_hat + eta_pos_hat)
+  mu_neg <- N_offset * exp(X[inds,] %*% beta_neg_hat + eta_neg_hat)
   log_p_y <- sum(dpois(dat$Y_pos, mu_pos, log = TRUE) + dpois(dat$Y_neg, mu_neg, log = TRUE))
   
-  # evaluate penalty
+  # Evaluate penalty
   sum_log_p_y <- c()
   for (s in 1:nrow(eta_pos_samples)){
     
-    # vector of means for the ith posterior draw
-    lambda_s_pos <- exp(X[inds,] %*% beta_pos_samp[s,] + eta_pos_samples[s,])
-    lambda_s_neg <- exp(X[inds,] %*% beta_neg_samp[s,] + eta_neg_samples[s,])
+    # Vector of means for the ith posterior draw
+    lambda_s_pos <- N_offset * exp(X[inds,] %*% beta_pos_samp[s,] + eta_pos_samples[s,])
+    lambda_s_neg <- N_offset * exp(X[inds,] %*% beta_neg_samp[s,] + eta_neg_samples[s,])
     
-    # take log density of observed data for the ith sample
+    # Take log density of observed data for the ith sample
     log_p_y_s <- sum(dpois(dat$Y_pos, lambda_s_pos, log = T)) + sum(dpois(dat$Y_neg, lambda_s_neg, log = T))
     sum_log_p_y <- c(sum_log_p_y, log_p_y_s)
   }
@@ -582,38 +540,12 @@ if (ANALYZE_SPOIS){
                               phi_samples = phi_pos_samples,
                               d = dat$D,
                               ids = dat$I_obs)
-    
-    saveRDS(eta_neg_krige, SPATIAL_POISSON_KRIGE_NEG_NAME)
-    saveRDS(eta_pos_krige, SPATIAL_POISSON_KRIGE_POS_NAME)
   
-  } else {
-    
-    eta_pos_krige <- readRDS(SPATIAL_POISSON_KRIGE_POS_NAME)
-    eta_neg_krige <- readRDS(SPATIAL_POISSON_KRIGE_NEG_NAME)
-    
   }
   
   # Combine observed and kriged samples
   eta_neg_all <- merge_krige(eta_neg_samples, eta_neg_krige, ids = dat$I_obs)
   eta_pos_all <- merge_krige(eta_pos_samples, eta_pos_krige, ids = dat$I_obs)
-  
-  par(mfrow=c(1,2))
-  hist(eta_pos_all, main='Spatial Random Effects (+)', xlab = 'Eta(x)')
-  hist(eta_neg_all, main='Spatial Random Effects (-)', xlab = 'Eta(x)')
-  par(mfrow=c(1,1))
-  
-  tmp = caPr.disc[[1]]
-  tmp[][!is.na(tmp[])] <- colMeans(eta_neg_all)
-  plot(tmp)
-  
-  tmp = caPr.disc[[1]]
-  tmp[][!is.na(tmp[])] <- colMeans(eta_pos_all)
-  plot(tmp)
-  
-  X <- dat$X
-  tmp[][!is.na(tmp[])] <- X %*% beta_pos_hat - X %*% beta_neg_hat
-  plot(tmp)
-  
   
   if (INTERPOLATE_SPOIS){
     
@@ -621,155 +553,43 @@ if (ANALYZE_SPOIS){
     r_pred <- caPr[[1]]
     
     # Define a raster at the starting (coarse) res.
-    r_train <- aggregate(r_pred, fact=AGG_FACTOR)
+    r_train <- aggregate(r_pred, fact = AGG_FACTOR)
     
-    if (FIND_BWS_SPOIS){
-      
-      # Get optimal bandwidthts for eta (+), eta (-), and w
-      bws_eta_neg <- get_optimal_bws(r_pred, r_train, colMeans(eta_neg_all))
-      bws_eta_pos <- get_optimal_bws(r_pred, r_train, colMeans(eta_pos_all))
+    # Get optimal bandwidthts for eta (+), eta (-), and w
+    bws_eta_neg <- get_optimal_bws(r_pred, r_train, colMeans(eta_neg_all))
+    bws_eta_pos <- get_optimal_bws(r_pred, r_train, colMeans(eta_pos_all))
 
-    } else {
-      
-      # Already found bandwidths
-      bws_eta_neg <- c(0.10517365, 0.09474079)
-      bws_eta_pos <- c(0.09179019, 0.08436939)
-
-    }
-    
-    # Smooth means
-    z <- colMeans(eta_neg_all)
-    df_new <- data.frame(xyFromCell(r_pred, (1:ncell(r_pred))[!is.na(r_pred[])]))
-    txdat <- data.frame(xyFromCell(r_train, (1:ncell(r_train))[!is.na(r_train[])]))
-    x <- txdat[,1]
-    y <- txdat[,2]
-    eta_neg_mod <- npreg(bws = bws_eta_neg,
-                         formula = z~x+y,
-                         regtype = "lc",
-                         ckertype = "gaussian")
-    eta_neg_pred <- predict(eta_neg_mod, newdata = df_new)
-    
-    par(mfrow=c(1,2))
-    tmp = caPr[[1]]
-    tmp[][!is.na(tmp[])] = eta_neg_pred
-    plot(tmp, main = 'Spatial Residual Process (-)')
-    
-    # Now do positives
-    z <- colMeans(eta_pos_all)
-    eta_pos_mod <- npreg(bws = bws_eta_pos,
-                         formula = z~x+y,
-                         regtype = "lc",
-                         ckertype = "gaussian")
-    eta_pos_pred <- predict(eta_pos_mod, newdata = df_new)
-    
-    tmp = caPr[[1]]
-    tmp[][!is.na(tmp[])] = eta_pos_pred
-    plot(tmp, main = 'Spatial Residual Process (+)')
-    
     # Interpolate eta (+) samples
-    eta_pos_interp <- interpolate_gp_batched(eta_pos_all, bws_eta_pos, r_train, r_pred, batch_size=500)
-    saveRDS(eta_pos_interp, SPOIS_ETA_POS_INTERP_FILE)
-    
-    tmp = caPr[[1]]
-    tmp[][!is.na(tmp[])] <- colMeans(eta_pos_interp)
-    plot(tmp, main = 'Spatial Residual Process (+)')
+    eta_pos_interp <- interpolate_gp_batched(eta_pos_all, bws_eta_pos, r_train, r_pred, batch_size = 500)
     
     # Interpolate eta (-) samples
-    eta_neg_interp <- interpolate_gp_batched(eta_neg_all, bws_eta_neg, r_train, r_pred, batch_size=500)
-    saveRDS(eta_neg_interp, SPOIS_ETA_NEG_INTERP_FILE)
-    
-    tmp = caPr[[1]]
-    tmp[][!is.na(tmp[])] <- colMeans(eta_neg_interp)
-    plot(tmp, main = 'Spatial Residual Process (-)')
-    
-  } else {
-    
-    eta_pos_interp <- readRDS(SPOIS_ETA_POS_INTERP_FILE)
-    eta_neg_interp <- readRDS(SPOIS_ETA_NEG_INTERP_FILE)
+    eta_neg_interp <- interpolate_gp_batched(eta_neg_all, bws_eta_neg, r_train, r_pred, batch_size = 500)
     
   }
-  
-  # Calculate risk from samples
-  beta_pos_samples <- posterior[,grepl('beta_pos', colnames(posterior))]
-  beta_neg_samples <- posterior[,grepl('beta_neg', colnames(posterior))]
-  
-  # calculate risk map
-  X_f <- cbind(1, 
-               caPr[[1]][][!is.na(caPr[[1]][])],
-               caPr[[2]][][!is.na(caPr[[2]][])])
-  lodds_spois_f <- (X_f %*% beta_pos_hat + eta_pos_pred) - 
-    (X_f %*% beta_neg_hat + eta_neg_pred)
-  risk_spois_f <- exp(lodds_spois_f)/(1 + exp(lodds_spois_f))
-  r_spois_f <- caPr[[1]]
-  r_spois_f[][!is.na(r_spois_f[])] <- risk_spois_f
-  plot(r_spois_f)
-  
-  tmp = caPr[[1]]
-  tmp[][!is.na(tmp[])] <- eta_pos_pred - eta_neg_pred
-  plot(tmp)
-  
-  tmp = caPr[[1]]
-  tmp[][!is.na(tmp[])] <- X_f %*% beta_pos_hat - X_f %*% beta_neg_hat
-  plot(tmp)
-  
-  plot(x=eta_pos_pred, y=X_f %*% beta_pos_hat)
-  
-  tmp = r_spois_f
-  tmp[][tmp[] > 0.02] = 5
-  plot(tmp)
-  
+
   # Plague risk map - fine resolution
-  X_f <- cbind(1, 
+  X_f <- cbind(1,
                caPr[[1]][][!is.na(caPr[[1]][])],
                caPr[[2]][][!is.na(caPr[[2]][])])
-  risk_spois_f <- calc_posterior_risk_ds(X_f, beta_pos_samples, beta_neg_samples, eta_pos_interp,
-                                         eta_neg_interp,
-                                         alpha_pos_samp = matrix(0, nrow=nrow(X_f) , ncol=1), 
-                                         alpha_neg_samp = matrix(0, nrow=nrow(X_f) , ncol=1),
-                                         w_samp = matrix(0, nrow=nrow(X_f), ncol=ncol(eta_neg_interp)))
+  risk_spois_f <- calc_posterior_risk(X_f, beta_pos_samples, beta_neg_samples, eta_pos_interp,
+                                      eta_neg_interp,
+                                      alpha_pos_samp = matrix(0, nrow = nrow(X_f) , ncol = 1), 
+                                      alpha_neg_samp = matrix(0, nrow = nrow(X_f) , ncol = 1),
+                                      w_samp = matrix(0, nrow = nrow(X_f), ncol = ncol(eta_neg_interp)))
   
   r_spois_f <- caPr[[1]]
   r_spois_f[][!is.na(r_spois_f[])] <- colMeans(risk_spois_f)
   plot(r_spois_f)
   
   # Significance indicators
-  mu_risk <- 0.064
-  r_inds <- apply(risk_spois_f, 2, function(x) return(mean(x > mu_risk) > 0.95))
-  r_spois_ind <- caPr[[1]]
-  r_spois_ind[][!is.na(r_spois_ind[])] <- r_inds
+  r_spois_ind1 <- calc_sig_map(risk_spois_f, threshold = 0.064)
+  r_spois_ind2 <- calc_sig_map(risk_spois_f, threshold = 0.032)
+  r_spois_ind <- stack(r_spois_ind1, r_spois_ind2)
   plot(r_spois_ind)
-  
-  mu_risk <- 0.032
-  r_inds <- apply(risk_spois_f, 2, function(x) return(mean(x > mu_risk) > 0.95))
-  r_spois_ind <- caPr[[1]]
-  r_spois_ind[][!is.na(r_spois_ind[])] <- r_inds
-  plot(r_spois_ind)
-  
   
   saveRDS(r_spois_f, SPOIS_FINE_RASTER_FILE)
   saveRDS(r_spois_ind, SPOIS_SIGNIFICANCE_RASTER_FILE)
-  
-  # Log odds and risk (coarse)
-  X <- dat$X
-  lodds_spois <- (X %*% beta_pos_hat + colMeans(eta_pos_all)) -
-     (X %*% beta_neg_hat + colMeans(eta_neg_all))
-  risk_spois <- exp(lodds_spois)/(1 + exp(lodds_spois))
-  r_spois <- caPr.disc[[1]]
-  r_spois[][!is.na(r_spois[])] <- risk_spois
-  plot(r_spois, main = 'Spatial Poisson')
-  
-  # Expected
-  par(mfrow=c(1,2))
-  exp_pos <- exp(X[dat$I_obs,] %*% beta_pos_hat + eta_pos_hat)
-  plot(x=dat$Y_pos, y=exp_pos, xlab = 'Observed Count', ylab = 'Expected Count',
-       main = 'Spatial Poisson (Disease Positive)')
-  abline(0, 1, col=2)
-  
-  exp_neg <- exp(X[dat$I_obs,] %*% beta_neg_hat + eta_neg_hat)
-  plot(x=dat$Y_neg, y=exp_neg, xlab = 'Observed Count', ylab = 'Expected Count',
-       main = 'Spatial Poisson (Disease Negative)')
-  abline(0, 1, col=2)
-  
+
   spois_params <- c()
   for (i in 1:3){
     spois_params <- rbind(
@@ -795,6 +615,7 @@ if (ANALYZE_SPOIS){
   }
   write_latex_table(spois_params, '/spois_estimates.txt', getwd())
   
+  # Other checks
   plot_title <- ggtitle("Posterior distributions",
                         "with medians and 80% intervals")
   color_scheme_set("green")
@@ -804,18 +625,11 @@ if (ANALYZE_SPOIS){
   
 }
 
-# ----------------- Proposed Model ------------------------- #
+# --------------------- Proposed Model --------------------- #
 
 if (ANALYZE_SLP){
   
   if (DOWNLOAD_FROM_S3){
-    
-    # retrieve data
-    save_object(
-      bucket = "plague-analysis",
-      object = 'plague_data.rds',
-      file = 'plague_data.rds'
-    )
     
     # retrieve fit
     save_object(
@@ -826,7 +640,7 @@ if (ANALYZE_SLP){
     
   }
   
-  dat <- readRDS(file = 'data/plague_data_agg7.rds')
+  dat <- readRDS(file = DATA_FILE)
   fit_slp <- readRDS(file = SLP_FILE)
   
   print(dat$N)
@@ -835,6 +649,7 @@ if (ANALYZE_SLP){
   posterior <- as.matrix(fit_slp)
   beta_pos_samples <- posterior[,grepl('beta_pos', colnames(posterior))]
   beta_neg_samples <- posterior[,grepl('beta_neg', colnames(posterior))]
+  beta_loc_samples <- posterior[,grepl('beta_loc', colnames(posterior))]
   alpha_pos_samples <- posterior[,'alpha_pos']
   alpha_neg_samples <- posterior[,'alpha_neg']
   print(paste("N col w:", ncol(posterior[,grepl('w', colnames(posterior))])))
@@ -848,7 +663,7 @@ if (ANALYZE_SLP){
                                & !(grepl('beta', colnames(posterior)))
                                & !(grepl('theta', colnames(posterior)))]
   
-  # Posterior meanss
+  # Posterior means
   eta_pos_hat <- colMeans(eta_pos_samples)
   eta_neg_hat <- colMeans(eta_neg_samples)
   alpha_pos_hat <- mean(alpha_pos_samples)
@@ -857,23 +672,30 @@ if (ANALYZE_SLP){
   beta_neg_hat <- colMeans(beta_neg_samples)
   w_hat <- colMeans(w_samples)
   
+  hist(alpha_pos_samples)
+  hist(alpha_neg_samples)
+  
   # DIC
+  
+  # Offset
+  N_offset <- dat$Y_loc[dat$I_obs]
+  
   X <- dat$X
   inds <- dat$I_obs
-  # log density of observed data given posterior mean
-  mu_pos <- exp(X[inds,] %*% beta_pos_hat + eta_pos_hat + alpha_pos_hat * w_hat[inds])
-  mu_neg <- exp(X[inds,] %*% beta_neg_hat + eta_neg_hat + alpha_neg_hat * w_hat[inds])
+  # Log density of observed data given posterior mean
+  mu_pos <- N_offset * exp(X[inds,] %*% beta_pos_hat + eta_pos_hat + alpha_pos_hat * w_hat[inds])
+  mu_neg <- N_offset * exp(X[inds,] %*% beta_neg_hat + eta_neg_hat + alpha_neg_hat * w_hat[inds])
   log_p_y <- sum(dpois(dat$Y_pos, mu_pos, log = TRUE) + dpois(dat$Y_neg, mu_neg, log = TRUE))
   
-  # compute penalty
+  # Compute penalty
   sum_log_p_y <- c()
   for (s in 1:nrow(eta_pos_samples)){
     
-    # vector of means for the ith posterior draw
-    lambda_s_pos <- exp(X[inds,] %*% beta_pos_samples[s,] + eta_pos_samples[s,] + alpha_pos_samples[s] * w_samples[s,][inds])
-    lambda_s_neg <- exp(X[inds,] %*% beta_neg_samples[s,] + eta_neg_samples[s,] + alpha_neg_samples[s] * w_samples[s,][inds])
+    # Vector of means for the ith posterior draw
+    lambda_s_pos <- N_offset * exp(X[inds,] %*% beta_pos_samples[s,] + eta_pos_samples[s,] + alpha_pos_samples[s] * w_samples[s,][inds])
+    lambda_s_neg <- N_offset * exp(X[inds,] %*% beta_neg_samples[s,] + eta_neg_samples[s,] + alpha_neg_samples[s] * w_samples[s,][inds])
     
-    # take log density of observed data for the ith sample
+    # Take log density of observed data for the ith sample
     log_p_y_s <- sum(dpois(dat$Y_pos, lambda_s_pos, log = T)) + sum(dpois(dat$Y_neg, lambda_s_neg, log = T))
     sum_log_p_y <- c(sum_log_p_y, log_p_y_s)
   }
@@ -928,14 +750,6 @@ if (ANALYZE_SLP){
                               d = dat$D,
                               ids = dat$I_obs)
     
-    saveRDS(eta_neg_krige, SLP_KRIGE_NEG_NAME)
-    saveRDS(eta_pos_krige, SLP_KRIGE_NEG_NAME)
-    
-  } else {
-    
-    eta_pos_krige <- readRDS(SLP_KRIGE_POS_NAME)
-    eta_neg_krige <- readRDS(SLP_KRIGE_NEG_NAME)
-    
   }
   
   # Combine observed and kriged samples
@@ -954,163 +768,45 @@ if (ANALYZE_SLP){
     # Define a raster at the starting (coarse) res.
     r_train <- aggregate(r_pred, fact=AGG_FACTOR)
     
-    if (FIND_BWS_SLP){
-
-      # Get optimal bandwidthts for eta (+), eta (-), and w
-      bws_eta_neg <- get_optimal_bws(r_pred, r_train, colMeans(eta_neg_all))
-      bws_eta_pos <- get_optimal_bws(r_pred, r_train, colMeans(eta_pos_all))
-      bws_w <- get_optimal_bws(r_pred, r_train, colMeans(w_samples))
-
-    } else {
-      
-      # Already found bandwidths
-      bws_eta_neg <- c(0.09317922, 0.08838268)
-      bws_eta_pos <- c(0.1310041, 0.1179912)
-      bws_w <- c(0.1193178, 0.1145402)
-      
-    }
-    
-    # Smooth means
-    z <- colMeans(eta_neg_all)
-    df_new <- data.frame(xyFromCell(r_pred, (1:ncell(r_pred))[!is.na(r_pred[])]))
-    txdat <- data.frame(xyFromCell(r_train, (1:ncell(r_train))[!is.na(r_train[])]))
-    x <- txdat[,1]
-    y <- txdat[,2]
-    eta_neg_mod <- npreg(bws = bws_eta_neg,
-                         formula = z~x+y,
-                         regtype = "lc",
-                         ckertype = "gaussian")
-    eta_neg_pred <- predict(eta_neg_mod, newdata = df_new)
-    
-    tmp = caPr[[1]]
-    tmp[][!is.na(tmp[])] = eta_neg_pred
-    plot(tmp, main = 'Spatial Residual Process (-)')
-    
-    # Now do positives
-    z <- colMeans(eta_pos_all)
-    eta_pos_mod <- npreg(bws = bws_eta_pos,
-                         formula = z~x+y,
-                         regtype = "lc",
-                         ckertype = "gaussian")
-    eta_pos_pred <- predict(eta_pos_mod, newdata = df_new)
-    
-    tmp = caPr[[1]]
-    tmp[][!is.na(tmp[])] = eta_pos_pred
-    plot(tmp, main = 'Spatial Residual Process (+)')
-    
-    # Now do w
-    z <- colMeans(w_samples)
-    w_mod <- npreg(bws=bws_w,
-                   formula=z~x+y,
-                   regtype="lc",
-                  ckertype="gaussian")
-    w_pred <- predict(w_mod, newdata=df_new)
-    
-    par(mfrow=c(1,1))
-    tmp = caPr[[1]]
-    tmp[][!is.na(tmp[])] = w_pred
-    plot(tmp, main = 'w')
+    # Get optimal bandwidthts for eta (+), eta (-), and w
+    bws_eta_neg <- get_optimal_bws(r_pred, r_train, colMeans(eta_neg_all))
+    bws_eta_pos <- get_optimal_bws(r_pred, r_train, colMeans(eta_pos_all))
+    bws_w <- get_optimal_bws(r_pred, r_train, colMeans(w_samples))
     
     # Interpolate each posterior sample of w via 2d kernel smoothing
-    w_interp <- interpolate_gp_batched(w_samples, bws_w, r_train, r_pred, batch_size=500)
-    saveRDS(w_interp, SLP_W_INTERP_FILE)
-    
+    w_interp <- interpolate_gp_batched(w_samples, bws_w, r_train, r_pred, batch_size = 500)
+
     # Interpolate eta (+)
-    eta_pos_interp <- interpolate_gp_batched(eta_pos_all, bws_eta_pos, r_train, r_pred, batch_size=500)
-    saveRDS(eta_pos_interp, SLP_ETA_POS_INTERP_FILE)
-    
+    eta_pos_interp <- interpolate_gp_batched(eta_pos_all, bws_eta_pos, r_train, r_pred, batch_size = 500)
+
     # Interpolate eta (-)
-    eta_neg_interp <- interpolate_gp_batched(eta_neg_all, bws_eta_neg, r_train, r_pred, batch_size=500)
-    saveRDS(eta_neg_interp, SLP_ETA_NEG_INTERP_FILE)
-    
-  } else {
-    
-    w_interp <- readRDS(SLP_W_INTERP_FILE)
-    eta_pos_interp <- readRDS(SLP_ETA_POS_INTERP_FILE)
-    eta_neg_interp <- readRDS(SLP_ETA_NEG_INTERP_FILE)
-    
+    eta_neg_interp <- interpolate_gp_batched(eta_neg_all, bws_eta_neg, r_train, r_pred, batch_size = 500)
+
   }
   
-  # Calculate risk from samples
-  tmp = caPr[[1]]
-  tmp[][!is.na(tmp[])] = colMeans(w_interp)
-  plot(tmp)
-  
-  tmp = caPr[[1]]
-  tmp[][!is.na(tmp[])] = X_f %*% colMeans(beta_pos_samples) + mean(alpha_pos_samples) * colMeans(w_interp)
-  plot(tmp)
-  
-  tmp = caPr[[1]]
-  tmp[][!is.na(tmp[])] = X_f %*% colMeans(beta_neg_samples) + mean(alpha_neg_samples) * colMeans(w_interp)
-  plot(tmp)
-  
-  tmp = caPr[[1]]
-  tmp[][!is.na(tmp[])] = (mean(alpha_pos_samples) - mean(alpha_neg_samples)) * colMeans(w_interp)
-  plot(tmp)
-  
-  tmp = caPr[[1]]
-  tmp[][!is.na(tmp[])] = colMeans(eta_pos_interp)
-  plot(tmp)
-  
-  tmp = caPr[[1]]
-  tmp[][!is.na(tmp[])] = colMeans(eta_neg_interp)
-  plot(tmp)
-  
-  # Calculate significance indicators
-  X_f <- cbind(1, 
+  # Calculate risk
+  X_f <- cbind(1,
                caPr[[1]][][!is.na(caPr[[1]][])],
                caPr[[2]][][!is.na(caPr[[2]][])])
-  risk_slp_f <- calc_posterior_risk_ds(X_f, beta_pos_samples, beta_neg_samples, eta_pos_interp,
-                                       eta_neg_interp, alpha_pos_samples, alpha_neg_samples,
-                                       w_interp)
+  risk_slp_f <- calc_posterior_risk(X_f, beta_pos_samples, beta_neg_samples, eta_pos_interp,
+                                    eta_neg_interp, alpha_pos_samples, alpha_neg_samples, w_interp)
   
-  tmp <- caPr[[1]]
-  tmp[][!is.na(tmp[])] <- colMeans(risk_slp_f)
-  plot(tmp)
-  
-  r_slp_f = tmp
-  
-  mu_risk <- 0.032
-  r_inds <- apply(risk_slp_f, 2, function(x) return(mean(x > mu_risk) > 0.95))
-  r_slp_ind <- caPr[[1]]
-  r_slp_ind[][!is.na(r_slp_ind[])] <- r_inds
-  plot(r_slp_ind)
-  
-  # Observed vs Expected
-  par(mfrow=c(1,2))
-  X <- dat$X
-  exp_pos <- exp(X[dat$I_obs,] %*% beta_pos_hat + eta_pos_hat + alpha_pos_hat * w_hat[dat$I_obs])
-  exp_neg <- exp(X[dat$I_obs,] %*% beta_neg_hat + eta_neg_hat + alpha_neg_hat * w_hat[dat$I_obs])
-  
-  par(mfrow=c(1,2))
-  plot(x=dat$Y_pos, y=exp_pos, xlab = 'Observed Count', ylab = 'Expected Count',
-       main = 'Preferential Sampling Model (Disease Positive)')
-  abline(0, 1, col=2)
-  
-  plot(x=dat$Y_neg, y=exp_neg, xlab = 'Observed Count', ylab = 'Expected Count',
-       main = 'Preferential Sampling Model (Disease Negative)')
-  abline(0, 1, col=2)
-  
-  # Raster at fine resolution
-  eta_neg_hat <- colMeans(eta_neg_samples)
-  eta_pos_hat <- colMeans(eta_pos_samples)
-  beta_pos_hat <- colMeans(posterior[,grepl('beta_pos', colnames(posterior))])
-  beta_neg_hat <- colMeans(posterior[,grepl('beta_neg', colnames(posterior))])
-  alpha_pos_hat <- mean(posterior[,'alpha_pos'])
-  alpha_neg_hat <- mean(posterior[,'alpha_neg'])
-  lodds_slp_f <- (X_f %*% beta_pos_hat + eta_pos_pred + alpha_pos_hat * w_pred) -
-    (X_f %*% beta_neg_hat + eta_neg_pred + alpha_neg_hat * w_pred)
-  avg_risk_slp_f <- exp(lodds_slp_f)/(1 + exp(lodds_slp_f))
-  r_slp_f <- caPr[[1]]
-  r_slp_f[][!is.na(r_slp_f[])] <- avg_risk_slp_f
+  # Risk map
+  r_slp_f <-  caPr[[1]]
+  r_slp_f[!is.na(r_slp_f[])] <- colMeans(risk_slp_f)
   plot(r_slp_f)
   
+  # Map of indicators for risk distribution exceeding thresholds
+  r_slp_ind1 <- calc_sig_map(risk_slp_f, threshold = 0.064)
+  r_slp_ind2 <- calc_sig_map(risk_slp_f, threshold = 0.032)
+  r_slp_ind <- stack(r_slp_ind1, r_slp_ind2)
+  plot(r_slp_ind)
+
+  # Save rasters
   saveRDS(r_slp_f, SLP_FINE_RASTER_FILE)
   saveRDS(r_slp_ind, SLP_SIGNIFICANCE_RASTER_FILE)
   
-  beta_loc_samples <- posterior[,grepl('beta_loc', colnames(posterior))]
-  
-  # parameter estimates
+  # Parameter estimates
   slp_params <- c()
   for (i in 1:3){
     slp_params <- rbind(
@@ -1149,13 +845,13 @@ if (ANALYZE_SLP){
     slp_params,
     data.frame(
       Parameter = paste0('Alpha (+)'),
-      Posterior.Mean = round(unname(alpha_pos_samples[i]), 3),
+      Posterior.Mean = round(unname(mean(alpha_pos_samples)), 3),
       Posterior.80.lb = round(unname(quantile(alpha_pos_samples, 0.025)), 3),
       Posterior.80.ub = round(unname(quantile(alpha_pos_samples, 0.975)), 3)
     ),
     data.frame(
       Parameter = paste0('Alpha (-)'),
-      Posterior.Mean = round(unname(alpha_neg_samples[i]), 3),
+      Posterior.Mean = round(unname(mean(alpha_neg_samples)), 3),
       Posterior.80.lb = round(unname(quantile(alpha_neg_samples, 0.025)), 3),
       Posterior.80.ub = round(unname(quantile(alpha_neg_samples, 0.975)), 3)
     ))
@@ -1163,87 +859,3 @@ if (ANALYZE_SLP){
   write_latex_table(slp_params, '/slp_estimates.txt', getwd())
   
 }
-
-##############################################################
-#                     Figures and Tables                     #
-##############################################################
-
-# Risk rasters
-r_slp_f <- readRDS(SLP_FINE_RASTER_FILE)
-r_spois_f <- readRDS(SPOIS_FINE_RASTER_FILE)
-r_pois_f <- readRDS(POISSON_FINE_RASTER_FILE)
-
-bound <- max(r_pois_f[], na.rm = T)
-
-r_spois_f[][(!is.na(r_spois_f[])) &
-        (r_spois_f[] > bound)] <- bound
-r_slp_f[][(!is.na(r_slp_f[])) &
-              (r_slp_f[] > bound)] <- bound
-r_pois_f[][1] <- min(r_slp_f[], na.rm = T)
-par(mfrow=c(1,3))
-plot(r_pois_f, main = 'Poisson')
-plot(r_spois_f, main = 'Spatial Poisson')
-plot(r_slp_f, main = 'Proposed')
-
-
-# Significance rasters
-r_pois_inds <- readRDS(POISSON_SIGNIFICANCE_RASTER_FILE)
-r_spois_inds <- readRDS(SPOIS_SIGNIFICANCE_RASTER_FILE)
-r_slp_inds <- readRDS(SLP_SIGNIFICANCE_RASTER_FILE)
-
-min(r_slp_f[], na.rm=T)
-max(r_slp_f[], na.rm=T)
-
-plot(r_slp_f)
-plot(r_spois_f)
-plot(r_pois_f)
-
-plot(r_slp_inds)
-
-par(mfrow=c(1,3))
-plot(r_pois_f)
-plot(r_spois_f)
-plot(r_slp_f)
-
-tmp = r_spois_f
-tmp[][(!is.na(tmp[])) &
-        (tmp[] > 0.2)] <- 0.2
-plot(tmp)
-
-# ------------ Plot rasters on same scale ---------------
-
-max_r <- max(r_spois_f[], na.rm = T)
-
-min_r <- min(
-  min(r_spois_f[], na.rm = T),
-  min(r_pois_f[], na.rm = T),
-  min(r_slp_f[], na.rm = T)
-)
-
-r_pois_resc <- r_pois_f
-r_pois_resc[][!is.na(r_pois_resc[])][1] <- max_r
-r_pois_resc[][!is.na(r_pois_resc[])][2] <- min_r
-
-r_spois_resc <- r_spois_f
-r_spois_resc[][!is.na(r_spois_f[])][1] <- min_r 
-
-r_slp_resc <- r_slp_f
-r_slp_resc[][!is.na(r_slp_resc[])][1] <- max_r
-plot(r_slp_resc)
-
-par(mfrow=c(1,3))
-plot(r_pois_resc)
-plot(r_spois_resc)
-plot(r_slp_resc)
-
-r_slp_resc <- r_slp_f
-r_spois_resc <- r_spois_f
-r_pois_resc <- r_pois_f
-
-r_slp_resc[][!is.na(r_slp_resc[])][1] <- max_r
-r_pois_resc[][!is.na(r_pois_resc[])][1] <- max_r
-
-par(mfrow=c(1,3))
-plot(r_spois_resc)
-plot(r_slp_resc)
-plot(r_pois_resc)
