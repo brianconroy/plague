@@ -3,13 +3,12 @@ library(paws)
 
 # ----------------------- Constants ------------------------- #
 
-OUT_FILE <- 'plague_spatial_poisson_fit_agg7.rds'
+OUT_FILE <- 'plague_spatial_poisson_fit_spois.rds'
 
 DATA_FILE <- 'plague_data_agg7.rds'
 
 set.seed(123)
 
-# Fill these in
 Sys.setenv(
   AWS_ACCESS_KEY_ID = "",
   AWS_SECRET_ACCESS_KEY = "",
@@ -35,7 +34,8 @@ dat_spois <- list(
   X = dat$X[dat$I_obs,],
   D = dat$D[dat$I_obs, dat$I_obs],
   Y_pos = dat$Y_pos,
-  Y_neg = dat$Y_neg
+  Y_neg = dat$Y_neg,
+  N_samp = dat$Y_loc[dat$I_obs]
 )
 
 print(paste("fraction observed:", round(dat$N_obs/dat$N, 2)))

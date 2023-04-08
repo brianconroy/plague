@@ -3,13 +3,12 @@ library(paws)
 
 # ----------------------- Constants ------------------------- #
 
-OUT_FILE <- 'cdph_fits/plague_slp_fit_agg7.rds'
+OUT_FILE <- 'plague_slp_fit_slp.rds'
 
-DATA_FILE <- 'data/plague_data_agg7.rds'
+DATA_FILE <- 'plague_data_agg7.rds'
 
 set.seed(123)
 
-# Fill these in
 Sys.setenv(
   AWS_ACCESS_KEY_ID = "",
   AWS_SECRET_ACCESS_KEY = "",
@@ -27,6 +26,7 @@ svc$download_file(
   Filename = DATA_FILE
 )
 dat <- readRDS(file = DATA_FILE)
+dat$N_samp <- dat$Y_loc[dat$I_obs]
 
 print(paste("fraction observed:", round(dat$N_obs/dat$N, 2)))
 print(paste("Y (+) total:", sum(dat$Y_pos)))
@@ -37,8 +37,8 @@ print(paste("N:", sum(dat$N)))
 fit <- stan(
   file = 'slp.stan',
   data = dat,
-  chains = 2,
-  cores = 2)
+  chains = 4,
+  cores = 4)
 
 saveRDS(fit, file = OUT_FILE)
 
