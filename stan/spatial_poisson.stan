@@ -25,11 +25,13 @@ data {
   matrix[N_obs, N_obs] D;
   int<lower=0> Y_pos[N_obs];
   int<lower=0> Y_neg[N_obs];
+  vector[N_obs] N_samp;
 
 }
 transformed data {
   
   real delta = 1e-9;
+  vector[N_obs] offset = log(N_samp);
 
 }
 parameters {
@@ -75,9 +77,10 @@ model {
   
   // spatial covariance priors
   theta_pos ~ gamma(450, 1.5);
-  phi_pos ~ normal(0, 0.025);
-  theta_neg ~ gamma(450, 1.5); 
-  phi_neg ~ normal(0, 0.025);
+  theta_neg ~ gamma(450, 1.5);
+
+  phi_pos ~ normal(0, 1);
+  phi_neg ~ normal(0, 1);
   
   // white noise distributions
   xi_pos ~ std_normal();
@@ -87,8 +90,8 @@ model {
   beta_pos ~ std_normal();
   beta_neg ~ std_normal();
 
-  Y_pos ~ poisson_log(X * beta_pos + eta_pos);
+  Y_pos ~ poisson_log(offset + X * beta_pos + eta_pos);
   
-  Y_neg ~ poisson_log(X * beta_neg + eta_neg);
+  Y_neg ~ poisson_log(offset + X * beta_neg + eta_neg);
 
 }

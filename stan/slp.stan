@@ -28,11 +28,13 @@ data {
   int<lower=0> Y_pos[N_obs];
   int<lower=0> Y_neg[N_obs];
   int<lower=0> Y_loc[N];
-  
+  vector[N_obs] N_samp;
+
 }
 transformed data {
   
   real delta = 1e-9;
+  vector[N_obs] offset = log(N_samp);
 
 }
 parameters {
@@ -92,13 +94,14 @@ transformed parameters {
 
 }
 model {
-  
-  theta ~ gamma(450, 1.5);
-  phi ~ normal(0, 0.025);
+
   theta_pos ~ gamma(450, 1.5);
-  phi_pos ~ normal(0, 0.025);
-  theta_neg ~ gamma(450, 1.5); 
-  phi_neg ~ normal(0, 0.025);
+  theta_neg ~ gamma(450, 1.5);
+  theta ~ gamma(450, 1.5);
+  
+  phi ~ normal(0, 1);
+  phi_pos ~ normal(0, 1);
+  phi_neg ~ normal(0, 1);
   
   // white noise distributions
   xi ~ std_normal();
@@ -114,9 +117,9 @@ model {
   beta_neg ~ std_normal();
   beta_loc ~ std_normal();
   
-  Y_pos ~ poisson_log(X[I_obs] * beta_pos + eta_pos + alpha_pos * w[I_obs]);
+  Y_pos ~ poisson_log(offset + X[I_obs] * beta_pos + eta_pos + alpha_pos * w[I_obs]);
   
-  Y_neg ~ poisson_log(X[I_obs] * beta_neg + eta_neg + alpha_neg * w[I_obs]);
+  Y_neg ~ poisson_log(offset + X[I_obs] * beta_neg + eta_neg + alpha_neg * w[I_obs]);
   
   Y_loc ~ poisson_log(X * beta_loc + w);
   
